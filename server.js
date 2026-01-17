@@ -194,6 +194,17 @@ app.get("/logs/:qr_token", (req, res) => {
 // =====================
 // SERVER START
 // =====================
+// =====================
+// DEV ONLY: RESET DATABASE
+// =====================
+app.post("/dev/reset", (req, res) => {
+  db.run("DELETE FROM users", () => {
+    db.run("DELETE FROM logs", () => {
+      res.json({ message: "Database reset successful" });
+    });
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`Aadhaar Lite backend running on http://localhost:${PORT}`);
 });
