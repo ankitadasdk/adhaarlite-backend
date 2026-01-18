@@ -5,23 +5,59 @@ const crypto = require("crypto");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-
-// Middleware
+// =====================
+// MIDDLEWARE
+// =====================
 app.use(express.json());
 
-// Database
-const db = new sqlite3.Database("./aadhaar_lite_v2.db");
+// =====================
+// DATABASE
+// =====================
+const db = new sqlite3.Database("./aadhaar_lite_v2.db", (err) => {
+  if (err) {
+    console.error("DB connection error:", err.message);
+  } else {
+    console.log("Connected to SQLite DB");
+  }
+});
 
 // =====================
-// Helper Functions
+// INITIALIZE TABLES
 // =====================
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      aadhaar_hash TEXT PRIMARY KEY,
+      full_name TEXT NOT NULL,
+      date_of_birth TEXT,
+      village_code TEXT,
+      pin_hash TEXT NOT NULL,
+      qr_token TEXT UNIQUE NOT NULL,
+      is_active INTEGER DEFAULT 1
+    )
+  `);
 
-// Hash helper (SHA-256)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_hash TEXT,
+      service_type TEXT,
+      quantity REAL,
+      unit TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      prev_hash TEXT,
+      block_hash TEXT
+    )
+  `);
+});
+
+// =====================
+// HELPERS
+// =====================
 function hashValue(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-// Block hash for transaction chain
 function createBlockHash(data) {
   return crypto
     .createHash("sha256")
@@ -30,15 +66,24 @@ function createBlockHash(data) {
 }
 
 // =====================
+// HEALTH CHECK (IMPORTANT FOR RENDER)
+// =====================
+app.get("/", (req, res) => {
+  res.json({ status: "Aadhaar Lite backend is running 🚀" });
+});
+
+// =====================
 // REGISTER USER
 // =====================
 app.post("/register", (req, res) => {
+  console.log("REGISTER BODY:", req.body);
+
   const {
     full_name,
-    date_of_birth,
-    village_code,
     aadhaar_number,
-    pin
+    pin,
+    date_of_birth,
+    village_code
   } = req.body;
 
   if (!full_name || !aadhaar_number || !pin) {
@@ -63,7 +108,8 @@ app.post("/register", (req, res) => {
     ],
     function (err) {
       if (err) {
-        return res.status(500).json({ error: "User already exists or DB error" });
+        console.error("REGISTER ERROR:", err.message);
+        return res.status(400).json({ error: err.message });
       }
 
       res.json({
@@ -105,7 +151,7 @@ app.post("/verify", (req, res) => {
 });
 
 // =====================
-// TRANSACTION / SERVICE LOG
+// RECORD TRANSACTION
 // =====================
 app.post("/transact", (req, res) => {
   const { qr_token, service_type, quantity, unit } = req.body;
@@ -118,11 +164,9 @@ app.post("/transact", (req, res) => {
     "SELECT aadhaar_hash FROM users WHERE qr_token = ? AND is_active = 1",
     [qr_token],
     (err, user) => {
-      if (err || !user) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
-
-      const user_hash = user.aadhaar_hash;
 
       db.get(
         "SELECT block_hash FROM logs ORDER BY id DESC LIMIT 1",
@@ -131,7 +175,7 @@ app.post("/transact", (req, res) => {
           const prev_hash = lastLog ? lastLog.block_hash : "GENESIS";
 
           const blockData = {
-            user_hash,
+            user_hash: user.aadhaar_hash,
             service_type,
             quantity,
             unit,
@@ -146,16 +190,16 @@ app.post("/transact", (req, res) => {
              (user_hash, service_type, quantity, unit, prev_hash, block_hash)
              VALUES (?, ?, ?, ?, ?, ?)`,
             [
-              user_hash,
+              user.aadhaar_hash,
               service_type,
               quantity || null,
               unit || null,
               prev_hash,
               block_hash
             ],
-            function () {
+            () => {
               res.json({
-                message: "Transaction recorded successfully",
+                message: "Transaction recorded",
                 block_hash
               });
             }
@@ -192,10 +236,7 @@ app.get("/logs/:qr_token", (req, res) => {
 });
 
 // =====================
-// SERVER START
-// =====================
-// =====================
-// DEV ONLY: RESET DATABASE
+// DEV ONLY: RESET DB
 // =====================
 app.post("/dev/reset", (req, res) => {
   db.run("DELETE FROM users", () => {
@@ -205,6 +246,9 @@ app.post("/dev/reset", (req, res) => {
   });
 });
 
+// =====================
+// START SERVER
+// =====================
 app.listen(PORT, () => {
-  console.log(`Aadhaar Lite backend running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
